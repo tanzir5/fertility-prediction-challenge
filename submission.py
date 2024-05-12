@@ -24,7 +24,7 @@ from category_encoders import TargetEncoder
 import time 
 from tqdm import tqdm
 import pickle
-
+import numpy as np
 #import datatable as dt
 
 TARGET = 'new_child'
