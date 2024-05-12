@@ -195,7 +195,7 @@ def clean_df(df, background_df=None):
     ## This script contains a bare minimum working example
     # Create new variable with age
     return df
-    
+
     train_data = df
     train_background = background_df
     codebook = load_data()
@@ -206,7 +206,7 @@ def clean_df(df, background_df=None):
     return df
 
 
-def predict_outcomes(df, background_df=None, model_path="final_model_full.pkl"):
+def predict_outcomes(df, background_df=None, model_path="model.joblib"):
     """Generate predictions using the saved model and the input dataframe.
 
     The predict_outcomes function accepts a Pandas DataFrame as an argument
