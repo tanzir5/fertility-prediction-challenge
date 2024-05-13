@@ -75,7 +75,7 @@ def get_dtype_mapping(codebook):
 
 def load_data(train_data=None, train_background=None, nrows=None, col_subset=None):
     
-    codebook = pd.read_csv('data/PreFer_codebook.csv')
+    codebook = pd.read_csv('PreFer_codebook.csv')
 
     dtype_mapping = get_dtype_mapping(codebook)
     if train_background is None:
@@ -264,7 +264,7 @@ def clean_df(df, background_df=None, model=None):
     assert background_df is not None
     df, background_df, codebook = load_data(df, background_df)
     print("H1")
-    train_combined = merge_data(df, background_df, 'gen_data/top_200.csv')
+    train_combined = merge_data(df, background_df, 'top_200.csv')
     print("H2")
     train_combined = encode_and_clean_data(train_combined, codebook)
     print("H3")
@@ -284,7 +284,7 @@ def clean_df(df, background_df=None, model=None):
     train_combined = fill_missing_with_mean(
       train_combined, 
       compute_mean=False, 
-      mean_path='gen_data/means.csv'
+      mean_path='means.csv'
     )
     non_numeric_columns = [col for col in train_combined.columns if not pd.api.types.is_numeric_dtype(train_combined[col])]
     # print("*"*100)
