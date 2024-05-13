@@ -30,6 +30,8 @@ import numpy as np
 TARGET = 'new_child'
 KEY = 'nomem_encr'
 
+PROXY_TARGET = "cf20m130"
+
 def preprocess_background_data(background_data_path, dtype_mapping):
     # Load the background data
     background_data = pd.read_csv(background_data_path, dtype=dtype_mapping)
@@ -61,6 +63,7 @@ def preprocess_background_data(background_data_path, dtype_mapping):
 
     return background_data_latest
 
+
 def get_dtype_mapping(codebook):
     dtype_mapping = {}
     for _, row in tqdm(codebook.iterrows()):
@@ -70,16 +73,59 @@ def get_dtype_mapping(codebook):
             dtype_mapping[row['var_name']] = 'str'
     return dtype_mapping
 
-def load_data(nrows=None, col_subset=None):
-    codebook = pd.read_csv('PreFer_codebook.csv')
-    dtype_mapping = get_dtype_mapping(codebook)
+def load_data(train_data=None, train_background=None, nrows=None, col_subset=None):
     
-    return codebook
+    codebook = pd.read_csv('data/PreFer_codebook.csv')
 
-def merge_data(train_data, train_background):
+    dtype_mapping = get_dtype_mapping(codebook)
+    if train_background is None:
+      train_background = preprocess_background_data(
+          'data/PreFer_train_background_data.csv',
+          dtype_mapping
+      )
+    else:
+      train_background = train_background.astype(
+        {k: v for k, v in dtype_mapping.items() if k in train_background.columns}
+      )
+
+    if nrows is not None:
+        train_background = train_background.iloc[:nrows]
+    
+    if train_data is None:
+      train_data = pd.read_csv(
+          'data/PreFer_train_data.csv',
+          nrows=nrows,
+          dtype=dtype_mapping
+      )
+    else:
+      train_data = train_data.astype(
+        {k: v for k, v in dtype_mapping.items() if k in train_data.columns}
+      )
+
+
+    if col_subset is not None:
+        codebook = codebook.sort_values(by=['prop_missing'])
+        top_cols = codebook[
+            codebook['dataset']=='PreFer_train_data.csv'
+        ]['var_name'].iloc[:col_subset]
+        train_data = train_data[top_cols]
+
+    return train_data, train_background, codebook
+
+def merge_data(train_data, train_background, top_cols_path=None):
     train_combined = train_data.merge(
         train_background, on=KEY, how='left'
     )
+
+    if top_cols_path is not None:
+      top_cols = pd.read_csv(top_cols_path)['feature'].tolist()
+      for col in [PROXY_TARGET, KEY]:
+        if col not in top_cols:
+          top_cols.append(col)
+      train_combined = train_combined[top_cols]
+      for col in top_cols:
+        if col not in train_combined.columns:
+            train_combined[col] = None
     return train_combined
 
 def encode_and_clean_data(train_combined, codebook):
@@ -88,7 +134,10 @@ def encode_and_clean_data(train_combined, codebook):
         codebook[codebook['type_var'] == 'categorical']['var_name']
     )
     categorical_vars = [col for col in categorical_vars if col in train_combined.columns]
-
+    for col in categorical_vars:
+      train_combined[col] = train_combined[col].apply(
+        lambda x: x.split('.0')[0] if x != 'nan' else 'Missing'
+      )
     open_ended_vars = (
         codebook[codebook['type_var'] == 'response to open-ended question']
         ['var_name']
@@ -163,23 +212,40 @@ def encode_and_clean_data(train_combined, codebook):
         st = time.time()
         train_combined[high_cardinality_cats] = target_encoder.fit_transform(
             train_combined[high_cardinality_cats].fillna('Missing'), 
-            train_combined[TARGET]
+            train_combined[PROXY_TARGET]
         )  
         print(f"{time.time()-st} seconds for te")
         
     return train_combined
 
-def fill_missing_with_mean(df):
+def add_missing_features_from_model(df, model):
+  features = model.get_booster().feature_names
+  print(len(features), len(df.columns))
+  for feature in features:
+    if feature not in df.columns:
+      df[feature] = None 
+      
+  df = df[features]
+  print(f"length of df columns is {len(df.columns)}")
+  return df
+
+def fill_missing_with_mean(df, compute_mean=True, mean_path=None):
     # Compute the mean for each numeric column
-    means = df.drop(columns=[TARGET, KEY]).mean()
-    
+    if compute_mean:
+      means = df.drop(columns=[TARGET, KEY]).mean()
+      if mean_path is not None:
+        means.to_csv(mean_path)
+    else:
+      means = pd.read_csv(mean_path, index_col=0).squeeze("columns")  
     # Fill missing values with the computed means for all columns except the 
     # excluded ones
-    df.update(df.drop(columns=[TARGET, KEY]).fillna(means))
+    columns_to_drop = [col for col in [TARGET, KEY] if col in df.columns]
+
+    df.update(df.drop(columns=columns_to_drop).fillna(means))
+    print(f"245: length of df columns is {len(df.columns)}")
     return df
 
-
-def clean_df(df, background_df=None):
+def clean_df(df, background_df=None, model=None):
     """
     Preprocess the input dataframe to feed the model.
     # If no cleaning is done (e.g. if all the cleaning is done in a pipeline) leave only the "return df" command
@@ -194,16 +260,39 @@ def clean_df(df, background_df=None):
 
     ## This script contains a bare minimum working example
     # Create new variable with age
-    return df
 
-    train_data = df
-    train_background = background_df
-    codebook = load_data()
-    train_combined = merge_data(train_data, train_background)
+    assert background_df is not None
+    df, background_df, codebook = load_data(df, background_df)
+    print("H1")
+    train_combined = merge_data(df, background_df, 'gen_data/top_200.csv')
+    print("H2")
     train_combined = encode_and_clean_data(train_combined, codebook)
+    print("H3")
+    #print(train_combined.dtypes)
+    
     # Convert KEY to string
-    train_combined[KEY] = train_combined[KEY].astype(str)
-    return df
+    #train_combined[KEY] = train_combined[KEY].astype(str)
+
+    # cols_to_drop = train_combined.columns[train_combined.nunique() <= 1]
+    # print(f"cols to drop are: {cols_to_drop}")
+    # # Drop these columns
+    # train_combined = train_combined.drop(columns=cols_to_drop)
+    # # train_combined = train_combined.dropna(axis=1, how='all')
+    # print("OKAYAAAAA!!!")
+    if model is not None:
+      train_combined = add_missing_features_from_model(train_combined, model)
+    train_combined = fill_missing_with_mean(
+      train_combined, 
+      compute_mean=False, 
+      mean_path='gen_data/means.csv'
+    )
+    non_numeric_columns = [col for col in train_combined.columns if not pd.api.types.is_numeric_dtype(train_combined[col])]
+    # print("*"*100)
+    # print(non_numeric_columns)
+    for c in non_numeric_columns:
+      train_combined[c] = train_combined[c].astype(np.float64)
+    #exit(0)
+    return train_combined
 
 
 def predict_outcomes(df, background_df=None, model_path="model.joblib"):
@@ -238,14 +327,14 @@ def predict_outcomes(df, background_df=None, model_path="model.joblib"):
 
 
     # Preprocess the fake / holdout data
-    df = clean_df(df, background_df)
+    df = clean_df(df, background_df, model)
 
     # Exclude the variable nomem_encr if this variable is NOT in your model
     vars_without_id = df.columns[df.columns != 'nomem_encr']
 
     # Generate predictions from model, should be 0 (no child) or 1 (had child)
-    predictions = np.random.randint(0, 2, len(df))
 
+    predictions = model.predict(df)
     # Output file should be DataFrame with two columns, nomem_encr and predictions
     df_predict = pd.DataFrame(
         {"nomem_encr": df["nomem_encr"], "prediction": predictions}
